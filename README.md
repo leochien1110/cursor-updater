@@ -1,4 +1,11 @@
-In the era of AI, Cursor is one of the best AI agents for coding. However, it's UX for updating the IDE itself is such a pain in the ass. Therefore, I decide to build a simple service that will update the Cursor IDE itself daily. However, this might need a frequent maintenance due to the potential endpoint changes.
+# Cursor Updater
+
+![Linux x86_64](https://img.shields.io/badge/Linux-x86__64-green?logo=linux&logoColor=white)
+![Linux ARM64](https://img.shields.io/badge/Linux-ARM64-green?logo=linux&logoColor=white)
+
+
+> In the era of AI, Cursor is one of the best AI agents for coding. However, it's UX for updating the IDE itself is such a pain in the ass. Therefore, I decide to build a simple service that will update the Cursor IDE itself daily. However, this might need a frequent maintenance due to the potential endpoint changes.
+
 
 ## How to run
 
