@@ -1,14 +1,12 @@
 #!/bin/bash
 
 # Cursor IDE Update Script
-# This script checks for the latest version of Cursor IDE and updates it if necessary
+# Checks for the latest version of Cursor IDE and updates it if necessary
 
 set -euo pipefail
 
 # Configuration
-OPT_DIR="/opt"
-CURSOR_SYMLINK="$OPT_DIR/cursor.appimage"
-TEMP_DIR="/tmp/cursor-update"
+INSTALL_PATH="/opt/cursor.appimage"
 LOG_PREFIX="[Cursor Updater]"
 
 # Logging function
@@ -16,15 +14,15 @@ log() {
     echo "$LOG_PREFIX $1" >&2
 }
 
-# Check system architecture and set download URL
-get_download_url() {
+# Get platform string based on system architecture
+get_platform() {
     local arch=$(uname -m)
     case $arch in
         x86_64)
-            echo "https://www.cursor.com/download/stable/linux-x64"
+            echo "linux-x64"
             ;;
         aarch64|arm64)
-            echo "https://www.cursor.com/download/stable/linux-arm64"
+            echo "linux-arm64"
             ;;
         *)
             log "Error: Unsupported architecture: $arch"
@@ -33,132 +31,73 @@ get_download_url() {
     esac
 }
 
-# Get the version from an AppImage file
-get_appimage_version() {
-    local appimage_path="$1"
-    if [[ ! -f "$appimage_path" ]]; then
+# Get latest version and download URL from Cursor API
+get_latest_cursor_info() {
+    local platform="$1"
+    local api_url="https://www.cursor.com/api/download?platform=${platform}&releaseTrack=latest"
+    
+    log "Fetching latest version info from API..."
+    
+    local response=$(curl -s -H "User-Agent: Cursor-Version-Checker" -H "Cache-Control: no-cache" "$api_url")
+    if [[ $? -ne 0 ]] || [[ -z "$response" ]]; then
+        log "Error: Failed to fetch version info from API"
+        return 1
+    fi
+    
+    # Extract version and download URL from JSON response
+    local version=$(echo "$response" | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+    local download_url=$(echo "$response" | grep -o '"downloadUrl":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+    
+    if [[ -z "$version" ]] || [[ -z "$download_url" ]]; then
+        log "Error: Could not parse version or download URL from API response"
+        return 1
+    fi
+    
+    echo "$version|$download_url"
+    return 0
+}
+
+# Compare version strings using semantic versioning
+version_greater_than() {
+    local version1="$1"
+    local version2="$2"
+    
+    [[ -z "$version2" ]] && return 0
+    [[ -z "$version1" ]] && return 1
+    
+    # Convert to comparable format and use sort -V
+    local v1=$(echo "$version1" | sed 's/[^0-9.]//g')
+    local v2=$(echo "$version2" | sed 's/[^0-9.]//g')
+    
+    local higher=$(printf '%s\n%s\n' "$v1" "$v2" | sort -V | tail -n1)
+    [[ "$v1" == "$higher" ]] && [[ "$v1" != "$v2" ]]
+}
+
+# Get current installed version from the installed AppImage
+get_current_version() {
+    if [[ ! -f "$INSTALL_PATH" ]]; then
         echo ""
         return
     fi
     
-    # Extract version from filename or try to get it from the AppImage
-    local filename=$(basename "$appimage_path")
-    if [[ $filename =~ cursor-([0-9]+\.[0-9]+\.[0-9]+.*)-linux ]]; then
+    # Extract version from the symlink target or filename
+    local target=$(readlink "$INSTALL_PATH" 2>/dev/null || echo "$INSTALL_PATH")
+    local filename=$(basename "$target")
+    
+    # Match version pattern in filename
+    if [[ $filename =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
         echo "${BASH_REMATCH[1]}"
     else
         echo ""
     fi
 }
 
-# Get current installed version
-get_current_version() {
-    local cursor_files=($(find "$OPT_DIR" -name "cursor-*" -type f 2>/dev/null || true))
-    if [[ ${#cursor_files[@]} -eq 0 ]]; then
-        echo ""
-        return
-    fi
-    
-    # Get the version from the most recent cursor file
-    local latest_file=""
-    local latest_time=0
-    for file in "${cursor_files[@]}"; do
-        local file_time=$(stat -c %Y "$file" 2>/dev/null || echo 0)
-        if [[ $file_time -gt $latest_time ]]; then
-            latest_time=$file_time
-            latest_file="$file"
-        fi
-    done
-    
-    get_appimage_version "$latest_file"
-}
-
-# Download the latest version and get its filename
-download_latest() {
-    local download_url="$1"
-    
-    mkdir -p "$TEMP_DIR"
-    cd "$TEMP_DIR"
-    
-    log "Downloading latest Cursor IDE from $download_url"
-    
-    # Clean up any previous downloads
-    rm -f "$TEMP_DIR"/*cursor*.AppImage* 2>/dev/null || true
-    
-    # Download with content disposition to get the proper filename
-    if ! wget --content-disposition "$download_url"; then
-        log "Error: Failed to download Cursor IDE"
-        exit 1
-    fi
-    
-    # Find the downloaded file (case insensitive, handle various extensions)
-    local downloaded_file=$(find "$TEMP_DIR" -iname "*cursor*.AppImage*" -type f | head -n1)
-    if [[ -z "$downloaded_file" ]]; then
-        log "Error: Downloaded file not found"
-        log "Available files in temp directory:"
-        ls -la "$TEMP_DIR" >&2
-        exit 1
-    fi
-    
-    echo "$downloaded_file"
-}
-
-
-
-# Install the new version
-install_cursor() {
-    local downloaded_file="$1"
-    local filename=$(basename "$downloaded_file")
-    
-    # Clean filename - remove any trailing numbers that wget might add
-    local clean_filename=$(echo "$filename" | sed 's/\.[0-9]*$//')
-    # Ensure it has .AppImage extension
-    if [[ ! "$clean_filename" =~ \.AppImage$ ]]; then
-        clean_filename="${clean_filename}.AppImage"
-    fi
-    
-    local target_path="$OPT_DIR/$clean_filename"
-    
-    log "Installing $filename to $target_path"
-    
-    # Make executable
-    chmod +x "$downloaded_file"
-    
-    # Move to /opt with clean name
-    sudo mv "$downloaded_file" "$target_path"
-    
-    # Update symlink
-    sudo rm -f "$CURSOR_SYMLINK"
-    sudo ln -sf "$target_path" "$CURSOR_SYMLINK"
-    
-    log "Successfully installed Cursor IDE: $clean_filename"
-}
-
-# Clean up old versions (keep only the latest)
-cleanup_old_versions() {
-    log "Cleaning up old Cursor versions..."
-    
-    local cursor_files=($(find "$OPT_DIR" -name "cursor-*" -type f 2>/dev/null || true))
-    local symlink_target=""
-    
-    if [[ -L "$CURSOR_SYMLINK" ]]; then
-        symlink_target=$(readlink "$CURSOR_SYMLINK")
-    fi
-    
-    for file in "${cursor_files[@]}"; do
-        if [[ "$file" != "$symlink_target" ]]; then
-            log "Removing old version: $(basename "$file")"
-            sudo rm -f "$file"
-        fi
-    done
-}
-
 # Main execution
 main() {
     log "Starting Cursor IDE update check..."
     
-    # Get download URL based on architecture
-    local download_url=$(get_download_url)
-    log "Architecture: $(uname -m), Download URL: $download_url"
+    local platform=$(get_platform)
+    log "Platform: $platform"
     
     # Get current version
     local current_version=$(get_current_version)
@@ -168,34 +107,58 @@ main() {
         log "No current installation found"
     fi
     
-    # Download latest version
-    local downloaded_file=$(download_latest "$download_url")
-    local new_version=$(get_appimage_version "$downloaded_file")
+    # Get latest version and download URL from Cursor API
+    local cursor_info=$(get_latest_cursor_info "$platform")
+    if [[ $? -ne 0 ]]; then
+        log "Error: Could not get latest version info from API"
+        exit 1
+    fi
     
-    if [[ -n "$new_version" ]]; then
-        log "Downloaded version: $new_version"
+    local latest_version=$(echo "$cursor_info" | cut -d'|' -f1)
+    local download_url=$(echo "$cursor_info" | cut -d'|' -f2)
+    log "Latest version available: $latest_version"
+    
+    # Compare versions if current version exists
+    if [[ -n "$current_version" ]]; then
+        if version_greater_than "$latest_version" "$current_version"; then
+            log "Update available: $current_version -> $latest_version"
+        else
+            log "Already up to date. Current: $current_version, Latest: $latest_version"
+            exit 0
+        fi
     else
-        log "Warning: Could not determine version of downloaded file"
+        log "No current installation found, will download latest version: $latest_version"
     fi
     
-    # Compare versions
-    if [[ -n "$current_version" && "$current_version" == "$new_version" ]]; then
-        log "Already running the latest version ($current_version). No update needed."
-        rm -rf "$TEMP_DIR"
-        exit 0
+    # Download the latest version
+    local filename=$(basename "$download_url")
+    local temp_file="/tmp/$filename"
+    
+    log "Downloading $filename..."
+    if ! curl -L -o "$temp_file" "$download_url"; then
+        log "Error: Failed to download $filename"
+        exit 1
     fi
     
-    # Install new version
-    install_cursor "$downloaded_file"
+    # Verify download
+    if [[ ! -f "$temp_file" ]] || [[ ! -s "$temp_file" ]]; then
+        log "Error: Download verification failed"
+        exit 1
+    fi
     
-    # Clean up old versions
-    cleanup_old_versions
+    log "Download completed successfully"
     
-    # Clean up temp directory
-    rm -rf "$TEMP_DIR"
+    # Make executable and install
+    chmod +x "$temp_file"
+    log "Installing to $INSTALL_PATH..."
     
-    log "Update completed successfully!"
+    if ! sudo mv "$temp_file" "$INSTALL_PATH"; then
+        log "Error: Failed to install Cursor"
+        exit 1
+    fi
+    
+    log "Cursor IDE updated successfully to version $latest_version"
+    log "Please restart Cursor manually to use the new version"
 }
 
-# Run main function
 main "$@" 

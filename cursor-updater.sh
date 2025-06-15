@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Cursor IDE Updater Service Setup Script
-# This script sets up the systemd service and timer for daily automatic updates
+# Cursor IDE Updater Service Setup Script  
+# Sets up systemd service and timer for daily automatic updates
 
 set -euo pipefail
 
@@ -32,7 +32,6 @@ check_dependencies() {
     
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         log "Error: Missing required dependencies: ${missing_deps[*]}"
-        log "Please install them and try again."
         exit 1
     fi
 }
@@ -86,13 +85,8 @@ EOF
 enable_timer() {
     log "Enabling and starting the timer..."
     
-    # Reload systemd daemon
     sudo systemctl daemon-reload
-    
-    # Enable the timer
     sudo systemctl enable "$SERVICE_NAME.timer"
-    
-    # Start the timer
     sudo systemctl start "$SERVICE_NAME.timer"
     
     log "Timer enabled and started successfully"
@@ -111,7 +105,6 @@ show_status() {
 main() {
     log "Setting up Cursor IDE daily updater service..."
     
-    # Check dependencies
     check_dependencies
     
     # Ensure update script exists and is executable
@@ -122,14 +115,9 @@ main() {
     
     chmod +x "$SCRIPT_DIR/update-cursor.sh"
     
-    # Create service and timer files
     create_service
     create_timer
-    
-    # Enable and start timer
     enable_timer
-    
-    # Show status
     show_status
     
     log "Daily updater service setup completed successfully!"
