@@ -44,19 +44,16 @@ get_latest_cursor_info() {
         return 1
     fi
     
-    # Check if jq is available for JSON parsing
-    if ! command -v jq &> /dev/null; then
-        log "Error: jq is required for JSON parsing but not installed"
-        return 1
-    fi
-    
-    # Extract version and download URL from JSON response using jq
-    local version=$(echo "$response" | jq -r '.version // empty' 2>/dev/null)
-    local download_url=$(echo "$response" | jq -r '.downloadUrl // empty' 2>/dev/null)
+    # Extract version and download URL from JSON response
+    # Use built-in text processing instead of jq for better compatibility
+    local version=$(echo "$response" | grep -o '"version":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
+    local download_url=$(echo "$response" | grep -o '"downloadUrl":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
     
     if [[ -z "$version" ]] || [[ -z "$download_url" ]]; then
         log "Error: Could not parse version or download URL from API response"
-        log "API Response: $response"
+        log "Parsed version: '$version'"
+        log "Parsed download URL: '$download_url'"
+        log "API Response (first 500 chars): ${response:0:500}"
         return 1
     fi
     
@@ -101,16 +98,18 @@ get_current_version() {
         fi
     fi
     
-    # If no version found from symlink, try to extract from the AppImage directly
-    if [[ -z "$version" ]]; then
-        # Try to run the AppImage with --version flag
-        version=$("$INSTALL_PATH" --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 || echo "")
-    fi
+    # If no version found from symlink, skip AppImage execution to avoid opening Cursor
+    # (removed the --version execution as it opens the application instead of just printing version)
     
     # If still no version, try to extract from the filename itself
     if [[ -z "$version" ]]; then
         local filename=$(basename "$INSTALL_PATH")
-        if [[ $filename =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        # Try multiple patterns to extract version from filename
+        if [[ $filename =~ ([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?(\.[a-zA-Z0-9]+)?) ]]; then
+            version="${BASH_REMATCH[1]}"
+        elif [[ $filename =~ cursor-([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            version="${BASH_REMATCH[1]}"
+        elif [[ $filename =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             version="${BASH_REMATCH[1]}"
         fi
     fi
@@ -118,9 +117,27 @@ get_current_version() {
     echo "$version"
 }
 
+# Check execution context and prepare sudo prefix
+prepare_sudo() {
+    if [[ $EUID -eq 0 ]]; then
+        log "Running as root - no sudo needed"
+        SUDO_PREFIX=""
+    else
+        log "Running as regular user - checking sudo availability"
+        if ! command -v sudo &> /dev/null; then
+            log "Error: sudo is required to install to $INSTALL_PATH"
+            exit 1
+        fi
+        SUDO_PREFIX="sudo"
+    fi
+}
+
 # Main execution
 main() {
     log "Starting Cursor IDE update check..."
+    
+    # Check execution context and prepare sudo
+    prepare_sudo
     
     local platform=$(get_platform)
     log "Platform: $platform"
@@ -185,11 +202,17 @@ main() {
     chmod +x "$temp_file"
     log "Installing to $INSTALL_PATH..."
     
-    if ! mv "$temp_file" "$INSTALL_PATH"; then
+    # Ensure destination directory exists
+    $SUDO_PREFIX mkdir -p "$(dirname "$INSTALL_PATH")"
+    
+    if ! $SUDO_PREFIX mv -f "$temp_file" "$INSTALL_PATH"; then
         log "Error: Failed to install Cursor"
         rm -rf "$temp_dir"
         exit 1
     fi
+    
+    # Set proper permissions
+    $SUDO_PREFIX chmod 755 "$INSTALL_PATH"
     
     # Clean up
     rm -rf "$temp_dir"
